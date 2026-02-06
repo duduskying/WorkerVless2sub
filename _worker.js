@@ -46,6 +46,61 @@ let 网络备案 = `<a href='https://t.me/CMLiussss'>萌ICP备-20240707号</a>`;
 let 额外ID = '0';
 let 加密方式 = 'auto';
 let 网站图标, 网站头像, 网站背景, xhttp = '';
+const KV_KEYS = {
+	ADDAPI: 'ADDAPI',
+	PROXYIP: 'PROXYIP'
+};
+
+function 提取请求令牌(request) {
+	const url = new URL(request.url);
+	const queryToken = url.searchParams.get('token');
+	if (queryToken && queryToken.trim() !== '') return queryToken.trim();
+	const headerToken = request.headers.get('x-token');
+	if (headerToken && headerToken.trim() !== '') return headerToken.trim();
+	const auth = request.headers.get('authorization') || '';
+	if (auth.toLowerCase().startsWith('bearer ')) {
+		const bearer = auth.slice(7).trim();
+		if (bearer) return bearer;
+	}
+	return '';
+}
+
+function 校验令牌(token, allowList) {
+	if (!Array.isArray(allowList) || allowList.length === 0) return true;
+	if (!token) return false;
+	return allowList.includes(token);
+}
+
+async function 读取KV配置(kv) {
+	if (!kv || typeof kv.get !== 'function') {
+		return { ADDAPI: '', PROXYIP: '' };
+	}
+	const [addapi, proxyip] = await Promise.all([
+		kv.get(KV_KEYS.ADDAPI),
+		kv.get(KV_KEYS.PROXYIP)
+	]);
+	return {
+		ADDAPI: addapi || '',
+		PROXYIP: proxyip || ''
+	};
+}
+
+async function 写入KV配置(kv, payload) {
+	if (!kv || typeof kv.put !== 'function') return;
+	const updates = [];
+	const setValue = async (key, value) => {
+		if (value === undefined) return;
+		const normalized = String(value).trim();
+		if (normalized === '') {
+			if (typeof kv.delete === 'function') await kv.delete(key);
+			return;
+		}
+		await kv.put(key, normalized);
+	};
+	updates.push(setValue(KV_KEYS.ADDAPI, payload.ADDAPI));
+	updates.push(setValue(KV_KEYS.PROXYIP, payload.PROXYIP));
+	await Promise.all(updates);
+}
 async function 整理优选列表(api) {
 	if (!api || api.length === 0) return [];
 
@@ -587,6 +642,21 @@ async function subHtml(request) {
 						word-break: break-all;
 					}
 
+					.config-status {
+						text-align: center;
+						font-size: 13px;
+						color: #666;
+						margin: -8px 0 16px 0;
+					}
+
+					.config-status.ok {
+						color: #2f855a;
+					}
+
+					.config-status.error {
+						color: #c53030;
+					}
+
 					.github-corner svg {
 						fill: var(--primary-color);
 						color: var(--card-bg);
@@ -803,10 +873,25 @@ async function subHtml(request) {
 						<input type="text" id="result" readonly onclick="copyToClipboard()">
 						<label id="qrcode" style="margin: 15px 10px -15px 10px;"></label>
 					</div>
+
+					<div class="input-group">
+						<label for="addapi">ADDAPI（GitHub 地址）</label>
+						<input type="text" id="addapi" placeholder="https://raw.githubusercontent.com/.../addressesapi.txt">
+					</div>
+
+					<div class="input-group">
+						<label for="proxyip">PROXYIP（ip:端口）</label>
+						<input type="text" id="proxyip" placeholder="1.2.3.4:443">
+					</div>
+
+					<button onclick="saveConfig()">保存配置</button>
+					<div id="configStatus" class="config-status"></div>
 					<div class="beian-info" style="text-align: center; font-size: 13px;">${网络备案}</div>
 				</div>
 	
 				<script>
+					const token = new URLSearchParams(window.location.search).get('token') || '';
+
 					function toggleTooltip(event) {
 						event.stopPropagation(); // 阻止事件冒泡
 						const tooltip = document.getElementById('infoTooltip');
@@ -851,6 +936,64 @@ async function subHtml(request) {
 						}).catch(err => {
 							alert('复制失败，请手动复制');
 						});
+					}
+
+					function setConfigStatus(message, type) {
+						const status = document.getElementById('configStatus');
+						status.textContent = message || '';
+						status.className = 'config-status' + (type ? ' ' + type : '');
+					}
+
+					async function loadConfig() {
+						if (!token) {
+							setConfigStatus('需要在 URL 中携带 token 参数才能读取/保存配置', 'error');
+							document.getElementById('addapi').disabled = true;
+							document.getElementById('proxyip').disabled = true;
+							return;
+						}
+						try {
+							const resp = await fetch('/config', {
+								headers: { 'x-token': token }
+							});
+							if (!resp.ok) {
+								setConfigStatus('读取配置失败（请检查 token）', 'error');
+								return;
+							}
+							const data = await resp.json();
+							document.getElementById('addapi').value = data.ADDAPI || '';
+							document.getElementById('proxyip').value = data.PROXYIP || '';
+							setConfigStatus('配置已加载', 'ok');
+						} catch (e) {
+							setConfigStatus('读取配置失败', 'error');
+						}
+					}
+
+					async function saveConfig() {
+						if (!token) {
+							alert('请在 URL 中携带 token 参数');
+							return;
+						}
+						const payload = {
+							ADDAPI: document.getElementById('addapi').value.trim(),
+							PROXYIP: document.getElementById('proxyip').value.trim()
+						};
+						try {
+							const resp = await fetch('/config', {
+								method: 'POST',
+								headers: {
+									'Content-Type': 'application/json',
+									'x-token': token
+								},
+								body: JSON.stringify(payload)
+							});
+							if (!resp.ok) {
+								setConfigStatus('保存失败（请检查 token）', 'error');
+								return;
+							}
+							setConfigStatus('保存成功', 'ok');
+						} catch (e) {
+							setConfigStatus('保存失败', 'error');
+						}
 					}
 	
 					function generateLink() {
@@ -906,6 +1049,8 @@ async function subHtml(request) {
 							alert('链接格式错误，请检查输入');
 						}
 					}
+
+					loadConfig();
 				</script>
 			</body>
 			</html>
@@ -920,7 +1065,10 @@ async function subHtml(request) {
 
 export default {
 	async fetch(request, env) {
-		if (env.TOKEN) 快速订阅访问入口 = await 整理(env.TOKEN);
+		const tokenConfigured = typeof env.TOKEN === 'string' && env.TOKEN.trim() !== '';
+		if (tokenConfigured) 快速订阅访问入口 = await 整理(env.TOKEN);
+		const authToken = 提取请求令牌(request);
+		const 是否授权 = !tokenConfigured || 校验令牌(authToken, 快速订阅访问入口);
 		BotToken = env.TGTOKEN || BotToken;
 		ChatID = env.TGID || ChatID;
 		subConverter = env.SUBAPI || subConverter;
@@ -943,9 +1091,39 @@ export default {
 			网站背景 = `background-image: url('${imgs[Math.floor(Math.random() * imgs.length)]}');`;
 		} else 网站背景 = '';
 		网络备案 = env.BEIAN || env.BY || 网络备案;
+		const url = new URL(request.url);
+		if (url.pathname === '/config') {
+			if (!是否授权) {
+				return new Response('Forbidden', { status: 403 });
+			}
+			if (!env.CONFIG_sub) {
+				return new Response('KV binding CONFIG_sub is missing', { status: 500 });
+			}
+			if (request.method === 'GET') {
+				const kvConfig = await 读取KV配置(env.CONFIG_sub);
+				return new Response(JSON.stringify(kvConfig), {
+					headers: { 'content-type': 'application/json; charset=utf-8' }
+				});
+			}
+			if (request.method === 'POST') {
+				let payload = {};
+				try {
+					payload = await request.json();
+				} catch {
+					return new Response('Invalid JSON', { status: 400 });
+				}
+				await 写入KV配置(env.CONFIG_sub, {
+					ADDAPI: payload.ADDAPI,
+					PROXYIP: payload.PROXYIP
+				});
+				return new Response(JSON.stringify({ ok: true }), {
+					headers: { 'content-type': 'application/json; charset=utf-8' }
+				});
+			}
+			return new Response('Method Not Allowed', { status: 405 });
+		}
 		const userAgentHeader = request.headers.get('User-Agent');
 		const userAgent = userAgentHeader ? userAgentHeader.toLowerCase() : "null";
-		const url = new URL(request.url);
 		const format = url.searchParams.get('format') ? url.searchParams.get('format').toLowerCase() : "null";
 		let host = "";
 		let uuid = "";
@@ -966,9 +1144,13 @@ export default {
 		let expire = Math.floor(timestamp / 1000);
 
 		link = env.LINK || link;
+		const kvConfig = await 读取KV配置(env.CONFIG_sub);
+		const kvAddapi = kvConfig.ADDAPI ? kvConfig.ADDAPI.trim() : '';
+		const kvProxyip = kvConfig.PROXYIP ? kvConfig.PROXYIP.trim() : '';
 
 		if (env.ADD) addresses = await 整理(env.ADD);
-		if (env.ADDAPI) addressesapi = await 整理(env.ADDAPI);
+		const addapiSource = kvAddapi || env.ADDAPI;
+		if (addapiSource) addressesapi = await 整理(addapiSource);
 		if (env.ADDNOTLS) addressesnotls = await 整理(env.ADDNOTLS);
 		if (env.ADDNOTLSAPI) addressesnotlsapi = await 整理(env.ADDNOTLSAPI);
 		function moveHttpUrls(sourceArray, targetArray) {
@@ -1002,7 +1184,8 @@ export default {
 		}
 
 		let 临时proxyIPs = [];
-		if (env.PROXYIP) 临时proxyIPs = await 整理(env.PROXYIP);
+		const proxyipSource = kvProxyip || env.PROXYIP;
+		if (proxyipSource) 临时proxyIPs = await 整理(proxyipSource);
 		if (env.PROXYIPAPI) {
 			const proxyIPsapi = await 整理(env.PROXYIPAPI);
 			if (proxyIPsapi.length > 0) {
@@ -1096,6 +1279,9 @@ export default {
 					const URL = URLs[Math.floor(Math.random() * URLs.length)];
 					return envKey === 'URL302' ? Response.redirect(URL, 302) : fetch(new Request(URL, request));
 				}
+				if (!是否授权) {
+					return new Response('Forbidden', { status: 403 });
+				}
 				return await subHtml(request);
 			}
 
@@ -1156,6 +1342,9 @@ export default {
 				}
 				const URL = URLs[Math.floor(Math.random() * URLs.length)];
 				return envKey === 'URL302' ? Response.redirect(URL, 302) : fetch(new Request(URL, request));
+			}
+			if (!是否授权) {
+				return new Response('Forbidden', { status: 403 });
 			}
 			return await subHtml(request);
 		} else if ((userAgent.includes('clash') || userAgent.includes('meta') || userAgent.includes('mihomo') || (format === 'clash' && !isSubConverterRequest)) && !userAgent.includes('nekobox') && !userAgent.includes('cf-workers-sub')) {
