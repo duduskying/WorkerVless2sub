@@ -101,6 +101,12 @@ async function 写入KV配置(kv, payload) {
 	updates.push(setValue(KV_KEYS.PROXYIP, payload.PROXYIP));
 	await Promise.all(updates);
 }
+
+function 选取单个ProxyIP(raw) {
+	if (!raw) return '';
+	const parts = raw.split(/[\n,]/).map(item => item.trim()).filter(Boolean);
+	return parts[0] || '';
+}
 async function 整理优选列表(api) {
 	if (!api || api.length === 0) return [];
 
@@ -1147,6 +1153,7 @@ export default {
 		const kvConfig = await 读取KV配置(env.CONFIG_sub);
 		const kvAddapi = kvConfig.ADDAPI ? kvConfig.ADDAPI.trim() : '';
 		const kvProxyip = kvConfig.PROXYIP ? kvConfig.PROXYIP.trim() : '';
+		const kvProxyipValue = 选取单个ProxyIP(kvProxyip);
 
 		if (env.ADD) addresses = await 整理(env.ADD);
 		const addapiSource = kvAddapi || env.ADDAPI;
@@ -1227,6 +1234,9 @@ export default {
 			}
 
 			path = env.PATH || "/?ed=2560";
+			if (kvProxyipValue) {
+				path = "/proxyip=" + kvProxyipValue;
+			}
 			sni = env.SNI || host;
 			type = env.TYPE || type;
 			隧道版本作者 = env.ED || 隧道版本作者;
@@ -1245,6 +1255,9 @@ export default {
 			host = url.searchParams.get('host');
 			uuid = url.searchParams.get('uuid') || url.searchParams.get('password') || url.searchParams.get('pw');
 			path = url.searchParams.get('path');
+			if (kvProxyipValue) {
+				path = "/proxyip=" + kvProxyipValue;
+			}
 			sni = url.searchParams.get('sni') || host;
 			type = url.searchParams.get('type') || type;
 			scv = url.searchParams.get('allowInsecure') == '1' ? 'true' : (url.searchParams.get('scv') || scv);
